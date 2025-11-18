@@ -94,4 +94,98 @@ class RFFLaplace(RandomFourierFeatures):
             probs_list.append(torch.mean(probs, dim=0)) # (K,)
             
         return torch.stack(probs_list, dim=0)
+    
+class VariationalLinear(torch.nn.Module):
+    def __init__(self, layer, raw_sigma_q=None, use_posterior=False):
+        super().__init__()
+        self.layer = layer
+        self.raw_sigma_q = raw_sigma_q
+        self.use_posterior = use_posterior
+                
+    def forward(self, x):
+        if self.training or self.use_posterior:
+            variational_params = self._variational_params()
+            variational_weight, variational_bias = self._unflatten(variational_params)
+            return torch.nn.functional.linear(
+                x, 
+                variational_weight, 
+                variational_bias,
+            )
+        return self.layer(x)
+    
+    def _variational_params(self):
+        params = self._flatten()
+        eps = torch.randn_like(params)
+        sigma = torch.nn.functional.softplus(self.raw_sigma_q)
+        return params + sigma * eps
+            
+    def _flatten(self):
+        return torch.cat([param.view(-1) for param in [self.layer.weight, self.layer.bias] if param is not None])
+    
+    def _unflatten(self, params):
+        out = []
+        for param in [self.layer.weight, self.layer.bias]:
+            out.append(None if param is None else params[:param.numel()].view_as(param))
+            if param is not None:
+                params = params[param.numel():]
+        return out
+     
+class VariationalConv2d(VariationalLinear):
+    def __init__(self, layer, raw_sigma_q=None, use_posterior=False):
+        super().__init__(layer, raw_sigma_q, use_posterior)
         
+    def forward(self, x):
+        if self.training or self.use_posterior:
+            variational_params = self._variational_params()
+            variational_weight, variational_bias = self._unflatten(variational_params)
+            return torch.nn.functional.conv2d(
+                x,
+                variational_weight,
+                variational_bias,
+                self.layer.stride,
+                self.layer.padding,
+                self.layer.dilation,
+                self.layer.groups
+            )
+        
+        return self.layer(x)
+
+class VariationalBatchNorm2d(VariationalLinear):
+    def __init__(self, layer, raw_sigma_q=None, use_posterior=False):
+        super().__init__(layer, raw_sigma_q, use_posterior)
+        
+    def forward(self, x):
+        if self.training or self.use_posterior:
+
+            if self.layer.momentum is None:
+                exponential_average_factor = 0.0
+            else:
+                exponential_average_factor = self.layer.momentum
+
+            if self.layer.training and self.layer.track_running_stats:
+                if self.layer.num_batches_tracked is not None:
+                    self.layer.num_batches_tracked.add_(1)
+                    if self.layer.momentum is None:
+                        exponential_average_factor = 1.0 / float(self.layer.num_batches_tracked)
+                    else:
+                        exponential_average_factor = self.layer.momentum
+
+            if self.layer.training:
+                bn_training = True
+            else:
+                bn_training = (self.layer.running_mean is None) and (self.layer.running_var is None)
+
+            variational_params = self._variational_params()
+            variational_weight, variational_bias = self._unflatten(variational_params)
+            return torch.nn.functional.batch_norm(
+                x, 
+                self.layer.running_mean if not self.layer.training or self.layer.track_running_stats else None, 
+                self.layer.running_var if not self.layer.training or self.layer.track_running_stats else None, 
+                variational_weight,
+                variational_bias,
+                bn_training, 
+                exponential_average_factor, 
+                self.layer.eps, 
+            )
+        
+        return self.layer(x)

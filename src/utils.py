@@ -5,6 +5,7 @@ from sklearn.model_selection import train_test_split
 import torch
 import torchvision
 # Importing our custom module(s)
+import layers
 
 def inv_softplus(x):
     return x + torch.log(-torch.expm1(-x))
@@ -111,6 +112,26 @@ def get_cifar10_datasets(root, n, random_state):
         
     return train_dataset, val_dataset, test_dataset
 
+def add_variational_layers(module, raw_sigma):
+    for name, child in module.named_children():
+        if isinstance(child, torch.nn.Linear):
+            setattr(module, name, layers.VariationalLinear(child, raw_sigma))
+        elif isinstance(child, torch.nn.Conv2d):
+            setattr(module, name, layers.VariationalConv2d(child, raw_sigma))
+        elif isinstance(child, torch.nn.BatchNorm2d):
+            setattr(module, name, layers.VariationalBatchNorm2d(child, raw_sigma))
+        else:
+            add_variational_layers(child, raw_sigma)
+            
+def use_posterior(self, flag):
+    for child in self.modules():
+        if isinstance(child, (
+            layers.VariationalLinear, 
+            layers.VariationalConv2d, 
+            layers.VariationalBatchNorm2d,
+        )):
+            child.use_posterior = flag
+
 def encode_images(model, dataloader):
     
     device = torch.device("cuda:0" if next(model.parameters()).is_cuda else "cpu")
@@ -137,3 +158,5 @@ def encode_images(model, dataloader):
 
 def flatten_params(model, excluded_params=["raw_lengthscale", "raw_outputscale", "raw_sigma_q", "raw_sigma_y", "raw_tau"]):
     return torch.cat([param.view(-1) for name, param in model.named_parameters() if param.requires_grad and name not in excluded_params])
+
+
