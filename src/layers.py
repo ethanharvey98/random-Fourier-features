@@ -3,6 +3,21 @@ import torch
 # Importing our custom module(s)
 import utils
 
+class LinearClassifier(torch.nn.Module):
+    def __init__(self, in_features, num_classes):
+        super().__init__()
+        self.linear = torch.nn.Linear(in_features=in_features, out_features=num_classes, bias=False)
+
+    def forward(self, x):
+        logits = self.linear(x)
+        return logits
+    
+    @torch.no_grad()
+    def predict_proba(self, x):
+        logits = self.linear(x)
+        probs = torch.nn.functional.softmax(logits, dim=1) # (S, K,)
+        return probs
+    
 class RandomFourierFeatures(torch.nn.Module):
     def __init__(self, in_features, rank=1024, lengthscale=20.0, outputscale=1.0, learnable_lengthscale=False, learnable_outputscale=False):
         super().__init__()
@@ -94,6 +109,27 @@ class RFFLaplace(RandomFourierFeatures):
             probs_list.append(torch.mean(probs, dim=0)) # (K,)
             
         return torch.stack(probs_list, dim=0)
+
+    @torch.no_grad()
+    def predict_logits(self, x, num_samples=10):
+        
+        batch_size = len(x)
+        
+        features = self.featurize(x) # (N, R)
+        logits = self.linear(features) # (N, R)
+
+        logits_list = []
+        
+        for i in range(batch_size):
+            phi = features[i].unsqueeze(1) # (R, 1)
+            # Compute posterior variance
+            var = (phi.T @ self.covariance @ phi).squeeze() # (K,)
+            # Compute predictive distribution
+            pred_dist = torch.distributions.normal.Normal(loc=logits[i], scale=torch.sqrt(var))
+            samples = pred_dist.sample(sample_shape=(num_samples,)) # (S, K,)
+            logits_list.append(torch.mean(samples, dim=0)) # (K,)
+            
+        return torch.stack(logits_list, dim=0)
     
 class VariationalLinear(torch.nn.Module):
     def __init__(self, layer, raw_sigma_q=None, use_posterior=False):
