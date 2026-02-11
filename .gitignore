@@ -26,7 +26,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# 
+# Extra SLURM and model specific ignores for size
 *.pth 
 *.out
 *.err
@@ -212,3 +212,6 @@ marimo/_lsp/
 __marimo__/
 
 datasets/*
+
+results/CIFAR-10/laplace_results/**/*.pth
+results/CIFAR-10/linear_results/**/*.pth
